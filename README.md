@@ -1,0 +1,2 @@
+# nsh
+The Neikos Shell
