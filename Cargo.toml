@@ -1,0 +1,10 @@
+[package]
+name = "nsh"
+version = "0.1.0"
+authors = ["Marcel Mueller <neikos@neikos.email>"]
+
+[dependencies]
+
+[dependencies.nom]
+version = "^2.1"
+features = ["verbose-errors"]
