@@ -1,25 +1,22 @@
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 use nom::{is_space, multispace};
 
-use types::Arg;
+use types::Command;
 
-named!(string_between_quotes<Arg>, alt!(
+named!(string_between_quotes<Command>, alt!(
     map!(
         delimited!(char!('\''), is_not!("\'"), char!('\'')),
-        Arg::to_normal
+        Command::to_argument
     ) | 
     map!(
         delimited!(char!('\"'), is_not!("\""), char!('\"')),
-        Arg::to_processed
+        Command::to_parsed_argument
     )
 ));
-named!(cont_string, take_till!(is_space));
 
-named!(pub command<(&OsStr, Vec<Arg>)>, tuple!(
+named!(pub command<(Command, Vec<Command>)>, tuple!(
     map!(
         take_till!(is_space),
-        OsStr::from_bytes
+        Command::to_executable
     ),
     do_parse!(
         opt!(take_while!(is_space)) >>
@@ -29,16 +26,40 @@ named!(pub command<(&OsStr, Vec<Arg>)>, tuple!(
     )
 ));
 
-named!(argument_w_or_wo_q<Arg>, alt!( string_between_quotes | map!(cont_string, Arg::to_normal) ) );
+named!(pipe<Command>, map!(
+    do_parse!(
+        opt!(take_while!(is_space))                                     >>
+        char!('|')                                                      >>
+        opt!(take_while!(is_space))                                     >>
+        rest: take_till!(alt!( eof!() | char!('|')))                     >>
+        args: dbg_dmp!(terminated!(command, opt!(char!('|'))))   >>
+        (args)
+    ),
+    Command::to_pipe
+));
 
-named!(pub argument<Arg>,
+named!(redirection<Command>, do_parse!(
+        opt!(take_while!(is_space)) >>
+        char!('>')                   >>
+        opt!(take_while!(is_space)) >>
+        arg: simple_argument        >>
+        (arg)
+));
+
+named!(string<Command>, map!(take_till!(is_space), Command::to_argument));
+
+named!(simple_argument<Command>, alt!(
+    string_between_quotes | string
+));
+
+named!(pub argument<Command>,
     preceded!(
         opt!(multispace),
-        argument_w_or_wo_q
+        alt!( pipe | redirection | simple_argument )
     )
 );
 
-named!(pub arguments< Vec<Arg> >, 
+named!(pub arguments< Vec<Command> >, 
     many0!( 
         argument
     )
@@ -51,7 +72,7 @@ mod test {
     use std::ffi::OsString;
     use nom::IResult;
 
-    use types::Arg;
+    use types::Command;
 
     macro_rules! oss {
         ($n:expr) => {{
@@ -61,30 +82,44 @@ mod test {
         }}
     }
 
-    macro_rules! arg {
-        (n $n:expr) => {Arg::Normal(oss!($n))};
-        (p $n:expr) => {Arg::Processed(oss!($n))};
+    macro_rules! com {
+        (n $n:expr) => {Command::Argument(oss!($n))};
+        (p $n:expr) => {Command::ParsedArgument(oss!($n))};
+        (e $n:expr) => {Command::Executable(oss!($n))};
+        (r $n:expr) => {Command::Redirection(oss!($n))};
+        (| ($e:expr, $n:expr)) => {Command::Pipe(Box::new(($e, $n)))};
     }
     
     #[test]
     fn parse_command() {
         let ret = command(b"ls -l");
-        assert_eq!(ret, IResult::Done(&b""[..], (&oss!("ls")[..], vec![arg!(n "-l")])));
+        assert_eq!(ret, IResult::Done(&b""[..], (com!(e "ls"), vec![com!(n "-l")])));
     }
 
     #[test]
     fn parse_command_complicated() {
         let ret = command(b"grep -P '.?|(..+?)\\1+' /dev/urandom");
         assert_eq!(ret, IResult::Done(&b""[..], 
-            (&oss!("grep")[..], vec![
-                arg!(n "-P"), arg!(n ".?|(..+?)\\1+"), arg!(n "/dev/urandom")
+            (com!(e "grep"), vec![
+                com!(n "-P"), com!(n ".?|(..+?)\\1+"), com!(n "/dev/urandom")
+            ])));
+    }
+
+    #[test]
+    fn parse_command_pipes() {
+        let ret = command(b"ip addr | grep inet | awk '{ print $2 }' | sort");
+        assert_eq!(ret, IResult::Done(&b""[..], 
+            (com!(e "ip"), vec![com!(n "addr"), 
+                com!(| (com!(e "grep"), vec![com!(n "inet")])),
+                com!(| (com!(e "awk"),  vec![com!(n "{ print $2 }")])),
+                com!(| (com!(e "sort"), vec![]))
             ])));
     }
 
     #[test]
     fn parse_argument() {
         let ret = argument(b"-l");
-        assert_eq!(ret, IResult::Done(&b""[..], arg!(n "-l")));
+        assert_eq!(ret, IResult::Done(&b""[..], com!(n "-l")));
     }
 
     #[test]
@@ -96,15 +131,15 @@ mod test {
     #[test]
     fn parse_arguments() {
         let ret = arguments(b"-l -h");
-        assert_eq!(ret, IResult::Done(&b""[..], vec![arg!(n "-l"), arg!(n "-h")]));
+        assert_eq!(ret, IResult::Done(&b""[..], vec![com!(n "-l"), com!(n "-h")]));
     }
 
     #[test]
     fn parse_arguments_with_quotes() {
         let ret = arguments(b"-l \"-h -g\"");
-        assert_eq!(ret, IResult::Done(&b""[..], vec![arg!(n "-l"), arg!(p "-h -g")]));
+        assert_eq!(ret, IResult::Done(&b""[..], vec![com!(n "-l"), com!(p "-h -g")]));
 
         let ret = arguments(b"-l '-h -g'");
-        assert_eq!(ret, IResult::Done(&b""[..], vec![arg!(n "-l"), arg!(n "-h -g")]));
+        assert_eq!(ret, IResult::Done(&b""[..], vec![com!(n "-l"), com!(n "-h -g")]));
     }
 }
