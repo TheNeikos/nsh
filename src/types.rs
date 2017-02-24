@@ -1,42 +1,20 @@
 use std::ffi::{OsStr, OsString};
-use std::os::unix::ffi::OsStrExt;
+use std::collections::HashMap;
+use std::os::unix::io::RawFd;
 
-#[derive(Debug, Eq, PartialEq)]
-pub enum Command {
-    Executable(OsString),
-    Argument(OsString),
-    ParsedArgument(OsString),
-    Pipe(Box<(Command, Vec<Command>)>),
-    Redirection(OsString),
+pub enum RawArgument {
+    Literal(OsString),
+    Variable(OsString),
+    Environment(OsString)
 }
 
-impl Command {
+pub enum Argument {
+    Literal(OsString),
+    Calculated(Vec<RawArgument>)
+}
 
-    pub fn to_pipe(a: (Command, Vec<Command>)) -> Command {
-        Command::Pipe(Box::new(a))
-    }
-
-    pub fn to_executable(b: &[u8]) -> Command {
-        let mut s = OsString::new();
-        s.push(OsStr::from_bytes(b));
-        Command::Executable(s)
-    }
-
-    pub fn to_redirection(b: &[u8]) -> Command {
-        let mut s = OsString::new();
-        s.push(OsStr::from_bytes(b));
-        Command::Redirection(s)
-    }
-
-    pub fn to_argument(b: &[u8]) -> Command {
-        let mut s = OsString::new();
-        s.push(OsStr::from_bytes(b));
-        Command::Argument(s)
-    }
-
-    pub fn to_parsed_argument(b: &[u8]) -> Command {
-        let mut s = OsString::new();
-        s.push(OsStr::from_bytes(b));
-        Command::ParsedArgument(s)
-    }
+pub struct Command {
+    executable: OsString,
+    arguments: Vec<Argument>,
+    redirections: HashMap<RawFd, Command>
 }
